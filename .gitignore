@@ -1,0 +1,30 @@
+/target
+/dist
+**/*.rs.bk
+*.log
+
+# Local editor/IDE state
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Local environment/secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.csr
+*.der
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/

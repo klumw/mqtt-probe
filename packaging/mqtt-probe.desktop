@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=MQTT Probe
+Name[de]=MQTT Probe
+GenericName=MQTT Explorer
+GenericName[de]=MQTT-Explorer
+Comment=Explore MQTT brokers, topics and messages
+Comment[de]=MQTT-Broker, Themen und Nachrichten erkunden
+Comment[fr]=Explorer les brokers, sujets et messages MQTT
+Comment[ko]=MQTT 브로커, 토픽 및 메시지 탐색
+Comment[zh]=浏览 MQTT Broker、主题和消息
+Keywords=MQTT;Broker;IoT;Topics;Explorer;Sensor;Probe;
+Exec=mqtt-probe
+TryExec=mqtt-probe
+Icon=mqtt-probe
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=mqtt-probe

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.klumw.mqttprobe</id>
+  <pkgname>mqtt-probe</pkgname>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <name>MQTT Probe</name>
+  <summary>Explore MQTT brokers, topics and messages</summary>
+  <summary xml:lang="de">MQTT-Broker, Themen und Nachrichten erkunden</summary>
+  <summary xml:lang="fr">Explorer les brokers, sujets et messages MQTT</summary>
+  <summary xml:lang="es">Explorar brokers, temas y mensajes MQTT</summary>
+
+  <description>
+    <p>
+      MQTT Probe is a native desktop application for exploring MQTT brokers,
+      topics and messages.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Live topic tree with search and payload previews</li>
+      <li>JSON, text, diff and chart views for message payloads</li>
+      <li>Publish composer with QoS, retain and history</li>
+      <li>TCP, TLS, mutual TLS, WebSocket and secure WebSocket transports</li>
+      <li>Multiple broker profiles and six interface languages</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">mqtt-probe.desktop</launchable>
+
+  <provides>
+    <binary>mqtt-probe</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/klumw/mqtt-probe</url>
+
+  <developer id="io.github.klumw">
+    <name>MQTT Probe contributors</name>
+  </developer>
+
+  <categories>
+    <category>Network</category>
+  </categories>
+
+  <keywords>
+    <keyword>MQTT</keyword>
+    <keyword>broker</keyword>
+    <keyword>IoT</keyword>
+    <keyword>topics</keyword>
+    <keyword>sensor</keyword>
+  </keywords>
+
+  <icon type="stock">mqtt-probe</icon>
+
+  <releases>
+    <release version="0.8.0" date="2026-10-23"/>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+</component>

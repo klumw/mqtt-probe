@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MQTT Probe">
+  <defs>
+    <linearGradient id="bg" x1="24" y1="16" x2="232" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A2230"/>
+      <stop offset="1" stop-color="#0C1017"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)" stroke="#2E3A4B" stroke-width="4"/>
+  <path d="M64 128h56V64h68M120 128v64h68" fill="none" stroke="#4DA3FF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="64" cy="128" r="22" fill="#4DA3FF"/>
+  <circle cx="64" cy="128" r="9" fill="#0C1017"/>
+  <circle cx="196" cy="64" r="18" fill="#3DDC97"/>
+  <circle cx="196" cy="64" r="7" fill="#0C1017"/>
+  <circle cx="196" cy="192" r="18" fill="#F2C14E"/>
+  <circle cx="196" cy="192" r="7" fill="#0C1017"/>
+</svg>

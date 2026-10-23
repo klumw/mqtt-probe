@@ -1,0 +1,38 @@
+[package]
+name = "mqtt-probe"
+version = "0.8.0"
+edition = "2024"
+rust-version = "1.95"
+description = "MQTT Probe — a native Rust reimplementation of MQTT Explorer"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["mqtt", "egui", "desktop", "iot", "explorer"]
+categories = ["gui", "network-programming"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+# The emoji font feature provides the file icon used by the path pickers.
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+eframe = { version = "0.37", features = ["persistence"] }
+egui_plot = "0.38"
+env_logger = "0.11"
+log = "0.4"
+rfd = "0.17"
+rumqttc = { version = "0.25", features = ["use-rustls", "websocket"] }
+rust-i18n = "4.2.4"
+rustls = "0.23"
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+similar = "2"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
+uuid = { version = "1", features = ["v4", "serde"] }
