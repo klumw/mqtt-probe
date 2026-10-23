@@ -2,11 +2,15 @@
 
 **Explore, analyze, and manage your MQTT brokers with speed and elegance.**
 
-**MQTT Probe** is a modern, native desktop application built in Rust. Inspired by the classic [MQTT Explorer](https://github.com/thomasnordquist/MQTT-Explorer), it combines a **GPU-accelerated interface** with **deep payload inspection tools**, making MQTT debugging smoother, faster, and more intuitive than ever. Ready-to-use binaries are available for both **Linux and Windows**!
+**MQTT Probe** is a modern, native desktop application built in Rust. Inspired by the [MQTT Explorer](https://github.com/thomasnordquist/MQTT-Explorer), it combines a **GPU-accelerated interface** with **deep payload inspection tools**, making MQTT debugging smoother, faster, and more intuitive than ever. Ready-to-use binaries are available for both **Linux and Windows**!
 
 ---
 
-## ✨ Key Features
+![MQTT Probe screenshot](docs/screenshot.png)
+
+---
+
+## Key Features
 
 Here is a quick look at everything MQTT Probe has to offer:
 
