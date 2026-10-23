@@ -312,13 +312,6 @@ connections.default_profile_name:
   ko: "로컬 브로커"
   zh: "本地 Broker"
   es: "Broker local"
-connections.summary:
-  en: "Topics: %{topics} · Messages: %{messages} · since %{since}"
-  de: "Themen: %{topics} · Nachrichten: %{messages} · seit %{since}"
-  fr: "Sujets : %{topics} · Messages : %{messages} · depuis %{since}"
-  ko: "토픽: %{topics} · 메시지: %{messages} · %{since}부터"
-  zh: "主题：%{topics} · 消息：%{messages} · 自 %{since}"
-  es: "Temas: %{topics} · Mensajes: %{messages} · desde %{since}"
 connections.delete_profile_tooltip:
   en: "Delete profile"
   de: "Profil löschen"
@@ -375,13 +368,6 @@ connections.uptime:
   ko: "가동 시간"
   zh: "运行时间"
   es: "Tiempo activo"
-connections.messages:
-  en: "Messages"
-  de: "Nachrichten"
-  fr: "Messages"
-  ko: "메시지"
-  zh: "消息"
-  es: "Mensajes"
 connections.messages_topics:
   en: "Messages: %{messages} · Topics: %{topics}"
   de: "Nachrichten: %{messages} · Themen: %{topics}"

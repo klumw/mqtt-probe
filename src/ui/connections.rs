@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::app::MqttUiApp;
 use crate::config::{ConnectionProfile, TransportKind, is_default_profile_name, new_client_id};
 use crate::mqtt::ConnectionState;
-use crate::util::{format_count, format_duration, truncate_chars};
+use crate::util::{format_duration, truncate_chars};
 
 use super::theme::palette;
 use super::widgets::{badge, section_heading, status_color, status_dot};
@@ -174,13 +174,10 @@ struct ProfileSnapshot {
     color: Color32,
     connected: bool,
     auto_connect: bool,
-    topics: usize,
-    messages: u64,
     uptime: Option<i64>,
     subscribe_topic: String,
     subscribed: Option<String>,
     last_error: Option<String>,
-    last_log: Option<String>,
 }
 
 enum ConnectionAction {
@@ -224,8 +221,6 @@ impl MqttUiApp {
                     color: status_color(&state, &pal),
                     connected: state.is_connected(),
                     auto_connect: profile.auto_connect,
-                    topics: runtime.map_or(0, |runtime| runtime.tree.value_topic_count),
-                    messages: runtime.map_or(0, |runtime| runtime.tree.received_messages),
                     uptime,
                     subscribe_topic: if profile.subscribe_topic.trim().is_empty() {
                         "—".to_owned()
@@ -234,7 +229,6 @@ impl MqttUiApp {
                     },
                     subscribed: runtime.and_then(|runtime| runtime.subscribed_topic.clone()),
                     last_error: runtime.and_then(|runtime| runtime.last_error.clone()),
-                    last_log: runtime.and_then(|runtime| runtime.logs.back().cloned()),
                 }
             })
             .collect();
@@ -261,300 +255,309 @@ impl MqttUiApp {
                 });
                 ui.add_space(6.0);
 
-                let list_height = (ui.available_height() - 190.0).max(140.0);
-                ScrollArea::vertical()
-                    .id_salt("connections-scroll")
-                    .auto_shrink([false, false])
-                    .max_height(list_height)
+                egui::Panel::bottom("broker-info-panel")
+                    .resizable(false)
+                    .show_separator_line(false)
+                    .default_size(150.0)
+                    .frame(Frame::new().inner_margin(Margin::symmetric(0, 6)))
                     .show(ui, |ui| {
-                        for profile in &profiles {
-                            let is_selected = selected == Some(profile.id);
-                            let card = Frame::new()
-                                .fill(if is_selected { pal.hover } else { pal.card })
-                                .stroke(Stroke::new(
-                                    1.0,
-                                    if is_selected { pal.accent } else { pal.border },
-                                ))
+                        if let Some(profile) =
+                            profiles.iter().find(|profile| Some(profile.id) == selected)
+                        {
+                            Frame::new()
+                                .fill(pal.card)
+                                .stroke(Stroke::new(1.0, pal.border))
                                 .corner_radius(CornerRadius::same(10))
                                 .inner_margin(Margin::same(10))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        status_dot(ui, profile.color);
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    RichText::new(truncate_chars(
-                                                        &profile.name,
-                                                        30,
-                                                    ))
-                                                    .strong()
-                                                    .color(pal.text),
-                                                )
-                                                .frame(false),
-                                            )
-                                            .on_hover_text(&profile.name)
-                                            .clicked()
-                                        {
-                                            action = Some(ConnectionAction::Select(profile.id));
-                                        }
-                                        if profile.auto_connect {
-                                            badge(ui, "AUTO", pal.muted);
-                                        }
-                                    });
-
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(&profile.endpoint)
-                                                .monospace()
-                                                .size(10.5)
-                                                .color(pal.muted),
-                                        );
-                                        match profile.transport {
-                                            TransportKind::Tcp => {}
-                                            TransportKind::Tls => badge(ui, "TLS", pal.success),
-                                            TransportKind::Ws => badge(ui, "WS", pal.muted),
-                                            TransportKind::Wss => badge(ui, "WSS", pal.success),
-                                        }
-                                    });
-
-                                    if profile.connected {
-                                        let uptime = profile
-                                            .uptime
-                                            .map(format_duration)
-                                            .unwrap_or_else(|| "00:00".to_owned());
-                                        ui.label(
-                                            RichText::new(t!(
-                                                "connections.summary",
-                                                topics = format_count(profile.topics as u64),
-                                                messages = format_count(profile.messages),
-                                                since = uptime
-                                            ))
-                                            .size(10.5)
-                                            .color(pal.muted),
-                                        );
-                                    } else if let Some(error) = &profile.last_error {
-                                        ui.label(
-                                            RichText::new(truncate_chars(error, 54))
-                                                .size(10.5)
-                                                .color(pal.danger),
-                                        );
-                                    }
-
-                                    ui.add_space(3.0);
-                                    ui.horizontal(|ui| {
-                                        if profile.connected {
-                                            if ui.small_button(t!("common.disconnect")).clicked() {
-                                                action =
-                                                    Some(ConnectionAction::Disconnect(profile.id));
-                                            }
-                                        } else {
-                                            let button = egui::Button::new(
-                                                RichText::new(t!("common.connect").to_string())
-                                                    .color(Color32::WHITE)
-                                                    .strong()
-                                                    .size(11.5),
-                                            )
-                                            .fill(pal.accent)
-                                            .stroke(Stroke::new(1.0, pal.accent));
-                                            if ui.add(button).clicked() {
-                                                action =
-                                                    Some(ConnectionAction::Connect(profile.id));
-                                            }
-                                        }
-                                        if ui.small_button(t!("common.edit")).clicked() {
-                                            action = Some(ConnectionAction::Edit(profile.id));
-                                        }
+                                        section_heading(ui, &t!("connections.broker_info"), &pal);
                                         ui.with_layout(
                                             Layout::right_to_left(Align::Center),
                                             |ui| {
-                                                if ui
-                                                    .small_button("×")
-                                                    .on_hover_text(t!(
-                                                        "connections.delete_profile_tooltip"
-                                                    ))
-                                                    .clicked()
-                                                {
-                                                    action = if delete_confirm == Some(profile.id) {
-                                                        Some(ConnectionAction::Delete(profile.id))
-                                                    } else {
-                                                        Some(ConnectionAction::AskDelete(
-                                                            profile.id,
-                                                        ))
-                                                    };
-                                                }
+                                                badge(ui, &profile.state_label, profile.color);
                                             },
                                         );
                                     });
-
-                                    if delete_confirm == Some(profile.id) {
-                                        ui.add_space(4.0);
-                                        Frame::new()
-                                            .fill(Color32::from_rgba_unmultiplied(
-                                                pal.danger.r(),
-                                                pal.danger.g(),
-                                                pal.danger.b(),
-                                                24,
-                                            ))
-                                            .stroke(Stroke::new(1.0, pal.danger))
-                                            .corner_radius(CornerRadius::same(7))
-                                            .inner_margin(Margin::same(7))
-                                            .show(ui, |ui| {
-                                                ui.label(
-                                                    RichText::new(
-                                                        t!("connections.delete_confirm")
-                                                            .to_string(),
-                                                    )
-                                                    .size(10.5)
-                                                    .color(pal.danger),
-                                                );
-                                                ui.horizontal(|ui| {
-                                                    if ui
-                                                        .small_button(t!("common.delete"))
-                                                        .clicked()
-                                                    {
-                                                        action = Some(ConnectionAction::Delete(
-                                                            profile.id,
-                                                        ));
-                                                    }
-                                                    if ui
-                                                        .small_button(t!("common.cancel"))
-                                                        .clicked()
-                                                    {
-                                                        action =
-                                                            Some(ConnectionAction::CancelDelete);
-                                                    }
-                                                });
-                                            });
-                                    }
-                                });
-                            if is_selected && scroll_selected {
-                                card.response.scroll_to_me(None);
-                            }
-                            ui.add_space(7.0);
-                        }
-
-                        if profiles.is_empty() {
-                            ui.add_space(20.0);
-                            ui.vertical_centered(|ui| {
-                                ui.label(
-                                    RichText::new(t!("connections.no_profiles").to_string())
-                                        .color(pal.muted),
-                                );
-                                ui.label(
-                                    RichText::new(t!("connections.create_first").to_string())
-                                        .size(10.5)
-                                        .color(pal.muted),
-                                );
-                            });
-                        }
-                    });
-
-                ui.add_space(8.0);
-                if let Some(profile) = profiles.iter().find(|profile| Some(profile.id) == selected)
-                {
-                    Frame::new()
-                        .fill(pal.card)
-                        .stroke(Stroke::new(1.0, pal.border))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(Margin::same(10))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                section_heading(ui, &t!("connections.broker_info"), &pal);
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    badge(ui, &profile.state_label, profile.color);
-                                });
-                            });
-                            egui::Grid::new("broker-info-grid")
-                                .num_columns(2)
-                                .spacing([12.0, 3.0])
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new(t!("connections.endpoint").to_string())
-                                            .size(10.5)
-                                            .color(pal.muted),
-                                    );
-                                    ui.label(
-                                        RichText::new(&profile.endpoint)
-                                            .monospace()
-                                            .size(10.5)
-                                            .color(pal.text),
-                                    );
-                                    ui.end_row();
-
-                                    ui.label(
-                                        RichText::new(t!("connections.subscription").to_string())
-                                            .size(10.5)
-                                            .color(pal.muted),
-                                    );
-                                    ui.label(
-                                        RichText::new(
-                                            profile
-                                                .subscribed
-                                                .as_ref()
-                                                .unwrap_or(&profile.subscribe_topic),
-                                        )
-                                        .monospace()
-                                        .size(10.5)
-                                        .color(pal.text),
-                                    );
-                                    ui.end_row();
-
-                                    if let Some(uptime) = profile.uptime {
-                                        ui.label(
-                                            RichText::new(t!("connections.uptime").to_string())
+                                    egui::Grid::new("broker-info-grid")
+                                        .num_columns(2)
+                                        .spacing([12.0, 3.0])
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                RichText::new(
+                                                    t!("connections.endpoint").to_string(),
+                                                )
                                                 .size(10.5)
                                                 .color(pal.muted),
-                                        );
-                                        ui.label(
-                                            RichText::new(format_duration(uptime))
+                                            );
+                                            ui.label(
+                                                RichText::new(&profile.endpoint)
+                                                    .monospace()
+                                                    .size(10.5)
+                                                    .color(pal.text),
+                                            );
+                                            ui.end_row();
+
+                                            ui.label(
+                                                RichText::new(
+                                                    t!("connections.subscription").to_string(),
+                                                )
+                                                .size(10.5)
+                                                .color(pal.muted),
+                                            );
+                                            ui.label(
+                                                RichText::new(
+                                                    profile
+                                                        .subscribed
+                                                        .as_ref()
+                                                        .unwrap_or(&profile.subscribe_topic),
+                                                )
                                                 .monospace()
                                                 .size(10.5)
                                                 .color(pal.text),
-                                        );
-                                        ui.end_row();
-                                    }
+                                            );
+                                            ui.end_row();
 
-                                    ui.label(
-                                        RichText::new(t!("connections.messages").to_string())
+                                            if let Some(uptime) = profile.uptime {
+                                                ui.label(
+                                                    RichText::new(
+                                                        t!("connections.uptime").to_string(),
+                                                    )
+                                                    .size(10.5)
+                                                    .color(pal.muted),
+                                                );
+                                                ui.label(
+                                                    RichText::new(format_duration(uptime))
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .color(pal.text),
+                                                );
+                                                ui.end_row();
+                                            }
+                                        });
+
+                                    if let Some(error) = &profile.last_error {
+                                        ui.add_space(3.0);
+                                        ui.label(
+                                            RichText::new(truncate_chars(error, 90))
+                                                .size(10.0)
+                                                .color(pal.danger),
+                                        );
+                                    }
+                                });
+                        } else {
+                            ui.label(
+                                RichText::new(t!("connections.select_profile").to_string())
+                                    .size(10.5)
+                                    .color(pal.muted),
+                            );
+                        }
+                    });
+
+                Frame::new()
+                    .fill(pal.panel)
+                    .stroke(Stroke::new(1.0, pal.border))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::same(6))
+                    .show(ui, |ui| {
+                        ScrollArea::vertical()
+                            .id_salt("connections-scroll")
+                            .auto_shrink([false, false])
+                            .max_height(ui.available_height())
+                            .show(ui, |ui| {
+                                for profile in &profiles {
+                                    let is_selected = selected == Some(profile.id);
+                                    let card = Frame::new()
+                                        .fill(if is_selected { pal.hover } else { pal.card })
+                                        .stroke(Stroke::new(
+                                            1.0,
+                                            if is_selected { pal.accent } else { pal.border },
+                                        ))
+                                        .corner_radius(CornerRadius::same(10))
+                                        .inner_margin(Margin::same(10))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                status_dot(ui, profile.color);
+                                                if ui
+                                                    .add(
+                                                        egui::Button::new(
+                                                            RichText::new(truncate_chars(
+                                                                &profile.name,
+                                                                30,
+                                                            ))
+                                                            .strong()
+                                                            .color(pal.text),
+                                                        )
+                                                        .frame(false),
+                                                    )
+                                                    .on_hover_text(&profile.name)
+                                                    .clicked()
+                                                {
+                                                    action =
+                                                        Some(ConnectionAction::Select(profile.id));
+                                                }
+                                                if profile.auto_connect {
+                                                    badge(ui, "AUTO", pal.muted);
+                                                }
+                                            });
+
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new(&profile.endpoint)
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .color(pal.muted),
+                                                );
+                                                match profile.transport {
+                                                    TransportKind::Tcp => {}
+                                                    TransportKind::Tls => {
+                                                        badge(ui, "TLS", pal.success)
+                                                    }
+                                                    TransportKind::Ws => badge(ui, "WS", pal.muted),
+                                                    TransportKind::Wss => {
+                                                        badge(ui, "WSS", pal.success)
+                                                    }
+                                                }
+                                            });
+
+                                            if !profile.connected
+                                                && let Some(error) = &profile.last_error
+                                            {
+                                                ui.label(
+                                                    RichText::new(truncate_chars(error, 54))
+                                                        .size(10.5)
+                                                        .color(pal.danger),
+                                                );
+                                            }
+
+                                            ui.add_space(3.0);
+                                            ui.horizontal(|ui| {
+                                                if profile.connected {
+                                                    if ui
+                                                        .small_button(t!("common.disconnect"))
+                                                        .clicked()
+                                                    {
+                                                        action =
+                                                            Some(ConnectionAction::Disconnect(
+                                                                profile.id,
+                                                            ));
+                                                    }
+                                                } else {
+                                                    let button = egui::Button::new(
+                                                        RichText::new(
+                                                            t!("common.connect").to_string(),
+                                                        )
+                                                        .color(Color32::WHITE)
+                                                        .strong()
+                                                        .size(11.5),
+                                                    )
+                                                    .fill(pal.accent)
+                                                    .stroke(Stroke::new(1.0, pal.accent));
+                                                    if ui.add(button).clicked() {
+                                                        action = Some(ConnectionAction::Connect(
+                                                            profile.id,
+                                                        ));
+                                                    }
+                                                }
+                                                if ui.small_button(t!("common.edit")).clicked() {
+                                                    action =
+                                                        Some(ConnectionAction::Edit(profile.id));
+                                                }
+                                                ui.with_layout(
+                                                    Layout::right_to_left(Align::Center),
+                                                    |ui| {
+                                                        if ui
+                                                            .small_button("×")
+                                                            .on_hover_text(t!(
+                                                                "connections.delete_profile_tooltip"
+                                                            ))
+                                                            .clicked()
+                                                        {
+                                                            action = if delete_confirm
+                                                                == Some(profile.id)
+                                                            {
+                                                                Some(ConnectionAction::Delete(
+                                                                    profile.id,
+                                                                ))
+                                                            } else {
+                                                                Some(ConnectionAction::AskDelete(
+                                                                    profile.id,
+                                                                ))
+                                                            };
+                                                        }
+                                                    },
+                                                );
+                                            });
+
+                                            if delete_confirm == Some(profile.id) {
+                                                ui.add_space(4.0);
+                                                Frame::new()
+                                                    .fill(Color32::from_rgba_unmultiplied(
+                                                        pal.danger.r(),
+                                                        pal.danger.g(),
+                                                        pal.danger.b(),
+                                                        24,
+                                                    ))
+                                                    .stroke(Stroke::new(1.0, pal.danger))
+                                                    .corner_radius(CornerRadius::same(7))
+                                                    .inner_margin(Margin::same(7))
+                                                    .show(ui, |ui| {
+                                                        ui.label(
+                                                            RichText::new(
+                                                                t!("connections.delete_confirm")
+                                                                    .to_string(),
+                                                            )
+                                                            .size(10.5)
+                                                            .color(pal.danger),
+                                                        );
+                                                        ui.horizontal(|ui| {
+                                                            if ui
+                                                                .small_button(t!("common.delete"))
+                                                                .clicked()
+                                                            {
+                                                                action =
+                                                                    Some(ConnectionAction::Delete(
+                                                                        profile.id,
+                                                                    ));
+                                                            }
+                                                            if ui
+                                                                .small_button(t!("common.cancel"))
+                                                                .clicked()
+                                                            {
+                                                                action = Some(
+                                                                    ConnectionAction::CancelDelete,
+                                                                );
+                                                            }
+                                                        });
+                                                    });
+                                            }
+                                        });
+                                    if is_selected && scroll_selected {
+                                        card.response.scroll_to_me(None);
+                                    }
+                                    ui.add_space(7.0);
+                                }
+
+                                if profiles.is_empty() {
+                                    ui.add_space(20.0);
+                                    ui.vertical_centered(|ui| {
+                                        ui.label(
+                                            RichText::new(
+                                                t!("connections.no_profiles").to_string(),
+                                            )
+                                            .color(pal.muted),
+                                        );
+                                        ui.label(
+                                            RichText::new(
+                                                t!("connections.create_first").to_string(),
+                                            )
                                             .size(10.5)
                                             .color(pal.muted),
-                                    );
-                                    ui.label(
-                                        RichText::new(t!(
-                                            "connections.messages_topics",
-                                            messages = format_count(profile.messages),
-                                            topics = format_count(profile.topics as u64)
-                                        ))
-                                        .monospace()
-                                        .size(10.5)
-                                        .color(pal.text),
-                                    );
-                                    ui.end_row();
-                                });
-
-                            if let Some(error) = &profile.last_error {
-                                ui.add_space(3.0);
-                                ui.label(
-                                    RichText::new(truncate_chars(error, 90))
-                                        .size(10.0)
-                                        .color(pal.danger),
-                                );
-                            } else if let Some(log) = &profile.last_log {
-                                ui.add_space(3.0);
-                                ui.label(
-                                    RichText::new(truncate_chars(log, 90))
-                                        .size(10.0)
-                                        .color(pal.muted),
-                                );
-                            }
-                        });
-                } else {
-                    ui.label(
-                        RichText::new(t!("connections.select_profile").to_string())
-                            .size(10.5)
-                            .color(pal.muted),
-                    );
-                }
+                                        );
+                                    });
+                                }
+                            });
+                    });
             });
 
         if scroll_selected {
