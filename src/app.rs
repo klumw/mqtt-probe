@@ -13,7 +13,7 @@ use crate::config::{
     AppConfig, ConfigStore, ConnectionProfile, ConnectionSnapshot, MAX_PUBLISH_HISTORY,
     PublishHistoryEntry, SavedTopic,
 };
-use crate::model::topic_tree::{InsertOutcome, TopicNode};
+use crate::model::topic_tree::{InsertOutcome, LEADING_SLASH_GROUP, TopicNode, display_path};
 use crate::model::{MessageRecord, TopicTree};
 use crate::mqtt::{self, Command, ConnectionHandle, ConnectionState, WorkerEvent};
 use crate::ui;
@@ -147,12 +147,19 @@ impl ConnectionRuntime {
     }
 
     pub(crate) fn forget_subtree(&mut self, path: &str) {
-        let prefix = format!("{path}/");
-        self.lit_topics
-            .retain(|topic| topic != path && !topic.starts_with(&prefix));
+        let matches = |topic: &str| {
+            if path == LEADING_SLASH_GROUP {
+                topic.starts_with('/')
+            } else {
+                topic == path
+                    || topic
+                        .strip_prefix(path)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            }
+        };
+        self.lit_topics.retain(|topic| !matches(topic));
         self.rebuild_lit_paths();
-        self.topic_updates
-            .retain(|topic, _| topic != path && !topic.starts_with(&prefix));
+        self.topic_updates.retain(|topic, _| !matches(topic));
     }
 
     pub(crate) fn forget_all(&mut self) {
@@ -815,7 +822,8 @@ impl MqttUiApp {
                 self.selected_topic = None;
                 self.history_selection = None;
                 self.chart_field = None;
-                self.toasts.info(t!("tree.removed_toast", path = path));
+                self.toasts
+                    .info(t!("tree.removed_toast", path = display_path(&path)));
             }
             DetailAction::ClearHistory => {
                 if let Some(runtime) = self
@@ -829,7 +837,7 @@ impl MqttUiApp {
                 self.toasts.info(t!("toast.history_cleared"));
             }
             DetailAction::UseTopicForPublish => {
-                self.publish.topic = path;
+                self.publish.topic = display_path(&path).to_owned();
                 self.publish.open = true;
             }
             DetailAction::UsePayloadForPublish(payload) => {

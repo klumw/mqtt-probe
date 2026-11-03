@@ -4,6 +4,7 @@ use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke
 use rust_i18n::t;
 
 use crate::app::MqttUiApp;
+use crate::model::topic_tree::display_path;
 use crate::util::{format_bytes, truncate_chars};
 
 use super::theme::palette;
@@ -145,7 +146,7 @@ impl MqttUiApp {
                     .clicked()
                     && let Some(topic) = &self.selected_topic
                 {
-                    self.publish.topic = topic.clone();
+                    self.publish.topic = display_path(topic).to_owned();
                 }
             });
 

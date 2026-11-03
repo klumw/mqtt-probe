@@ -11,6 +11,7 @@ use rust_i18n::t;
 
 use crate::app::MqttUiApp;
 use crate::model::TopicTree;
+use crate::model::topic_tree::display_path;
 use crate::util::{format_count, truncate_chars};
 
 use super::retained::RetainedDeleteScope;
@@ -207,7 +208,7 @@ pub fn tree_ui(
                     }
                 });
 
-                let display_path = if row.path.is_empty() { "/" } else { row.path };
+                let display = display_path(row.path);
                 let preview = if row.preview.is_empty() {
                     "—"
                 } else {
@@ -215,7 +216,7 @@ pub fn tree_ui(
                 };
                 let tooltip = t!(
                     "tree.topic_tooltip",
-                    path = display_path,
+                    path = display,
                     messages = format_count(row.total),
                     stored = format_count(row.stored as u64),
                     preview = preview
@@ -502,7 +503,8 @@ impl MqttUiApp {
                     self.history_selection = None;
                     self.chart_field = None;
                 }
-                self.toasts.info(t!("tree.removed_toast", path = path));
+                self.toasts
+                    .info(t!("tree.removed_toast", path = display_path(&path)));
             }
             TreeAction::DeleteRetained(path) => {
                 self.request_retained_delete(id, path, RetainedDeleteScope::Topic);
@@ -511,11 +513,11 @@ impl MqttUiApp {
                 self.request_retained_delete(id, path, RetainedDeleteScope::Branch);
             }
             TreeAction::CopyTopic(path) => {
-                ctx.copy_text(path.clone());
+                ctx.copy_text(display_path(&path).to_owned());
                 self.toasts.info(t!("tree.copied_toast"));
             }
             TreeAction::UseForPublish(path) => {
-                self.publish.topic = path;
+                self.publish.topic = display_path(&path).to_owned();
                 self.publish.open = true;
             }
         }

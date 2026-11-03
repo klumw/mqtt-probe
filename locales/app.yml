@@ -981,6 +981,13 @@ details.stats:
   ko: "%{stored}개 저장됨 · %{received}개 수신됨"
   zh: "已存储 %{stored} 条 · 已接收 %{received} 条"
   es: "%{stored} almacenados · %{received} recibidos"
+details.received:
+  en: "Received: %{time}"
+  de: "Empfangen: %{time}"
+  fr: "Reçu : %{time}"
+  ko: "수신: %{time}"
+  zh: "已接收：%{time}"
+  es: "Recibido: %{time}"
 details.since:
   en: "since %{time}"
   de: "seit %{time}"

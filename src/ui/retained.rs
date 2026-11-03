@@ -5,6 +5,7 @@ use rust_i18n::t;
 use uuid::Uuid;
 
 use crate::app::MqttUiApp;
+use crate::model::topic_tree::display_path;
 use crate::mqtt::Command;
 
 use super::theme::palette;
@@ -159,13 +160,5 @@ impl MqttUiApp {
             self.toasts
                 .error(t!("toast.retained_delete_failed", count = failed));
         }
-    }
-}
-
-fn display_path(path: &str) -> String {
-    if path.is_empty() {
-        "/".to_owned()
-    } else {
-        path.to_owned()
     }
 }

@@ -10,6 +10,7 @@ use similar::ChangeTag;
 
 use crate::app::MqttUiApp;
 use crate::config::AppSettings;
+use crate::model::topic_tree::display_path;
 use crate::model::{MessageRecord, TopicData};
 use crate::util::{format_bytes, format_count, format_time, hex_dump, human_qos, truncate_chars};
 
@@ -85,14 +86,14 @@ pub fn show(
 
     ui.horizontal_wrapped(|ui| {
         ui.label(
-            RichText::new(path)
+            RichText::new(display_path(path))
                 .monospace()
                 .size(13.5)
                 .strong()
                 .color(pal.text),
         );
         if ui.small_button(t!("common.copy")).clicked() {
-            ui.ctx().copy_text(path.to_owned());
+            ui.ctx().copy_text(display_path(path).to_owned());
         }
     });
 
@@ -128,12 +129,12 @@ pub fn show(
             }
         });
         ui.label(
-            RichText::new(format_time(
-                &latest.received_at,
-                settings.timestamps_utc,
-                true,
+            RichText::new(t!(
+                "details.received",
+                time = format_time(&latest.received_at, settings.timestamps_utc, true)
             ))
-            .size(10.5)
+            // 30% larger than the surrounding detail metadata.
+            .size(10.5 * 1.3)
             .color(pal.muted),
         );
         ui.label(

@@ -10,6 +10,23 @@ use crate::util::payload_preview;
 const MAX_VISIBLE_ROWS: usize = 20_000;
 const MAX_TOPIC_HISTORY_BYTES: u64 = 512 * 1024;
 
+/// Key for the synthetic node that groups topics starting with `/`.
+///
+/// Such topics have an empty first segment. That node has no MQTT path of its
+/// own, and an empty path already denotes the invisible root, so the UI
+/// addresses it through this key. MQTT topic names must not contain NUL, which
+/// keeps the key collision-free.
+pub const LEADING_SLASH_GROUP: &str = "\0";
+
+/// Returns a path as it should be shown to the user.
+pub fn display_path(path: &str) -> &str {
+    if path.is_empty() || path == LEADING_SLASH_GROUP {
+        "/"
+    } else {
+        path
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertOutcome {
     NewTopic,
@@ -199,6 +216,9 @@ impl TopicTree {
     }
 
     pub fn node(&self, path: &str) -> Option<&TopicNode> {
+        if path == LEADING_SLASH_GROUP {
+            return self.root.children.get("");
+        }
         if path.is_empty() {
             return Some(&self.root);
         }
@@ -210,6 +230,9 @@ impl TopicTree {
     }
 
     fn node_mut(&mut self, path: &str) -> Option<&mut TopicNode> {
+        if path == LEADING_SLASH_GROUP {
+            return self.root.children.get_mut("");
+        }
         if path.is_empty() {
             return Some(&mut self.root);
         }
@@ -271,6 +294,14 @@ impl TopicTree {
     }
 
     pub fn remove_topic(&mut self, path: &str) -> bool {
+        // Deleting the leading-slash group deletes every topic below it.
+        if path == LEADING_SLASH_GROUP {
+            let removed = self.root.children.remove("").is_some();
+            if removed {
+                self.recount();
+            }
+            return removed;
+        }
         if path.is_empty() {
             return false;
         }
@@ -329,9 +360,13 @@ impl TopicTree {
         let mut rows = Vec::new();
 
         if needle.is_empty() {
-            push_visible_root(&self.root, &mut rows);
+            for child in self.root.children.values() {
+                push_visible(child, 0, &mut rows);
+            }
         } else {
-            collect_filtered_root(&self.root, &needle, search_payload, &mut rows);
+            for child in self.root.children.values() {
+                collect_filtered(child, 0, &needle, search_payload, &mut rows);
+            }
         }
 
         if rows.len() > MAX_VISIBLE_ROWS {
@@ -360,6 +395,9 @@ impl TopicTree {
 }
 
 /// Calls `f` for every path prefix (root to leaf) of `topic`.
+///
+/// The synthetic group node for topics with a leading slash is reported as
+/// [`LEADING_SLASH_GROUP`], because its MQTT path would be empty.
 pub fn for_each_path_prefix(topic: &str, mut f: impl FnMut(&str)) {
     let mut path = String::with_capacity(topic.len());
     for (depth, segment) in topic.split('/').enumerate() {
@@ -367,7 +405,11 @@ pub fn for_each_path_prefix(topic: &str, mut f: impl FnMut(&str)) {
             path.push('/');
         }
         path.push_str(segment);
-        f(&path);
+        if depth == 0 && segment.is_empty() {
+            f(LEADING_SLASH_GROUP);
+        } else {
+            f(&path);
+        }
     }
 }
 
@@ -387,38 +429,6 @@ fn prune_empty(node: &mut TopicNode) {
     }
     node.children
         .retain(|_, child| child.data.is_some() || !child.children.is_empty());
-}
-
-/// Renders the root level while flattening the empty first segment that
-/// topics with a leading slash (for example `/tele/geiger`) create. Such a
-/// node only groups its children and would otherwise appear as a meaningless
-/// "/" row that cannot be deleted.
-fn push_visible_root<'a>(node: &'a TopicNode, rows: &mut Vec<TopicRow<'a>>) {
-    for child in node.children.values() {
-        if child.segment.is_empty() {
-            push_visible_root(child, rows);
-        } else {
-            push_visible(child, 0, rows);
-        }
-    }
-}
-
-/// Filtered counterpart of [`push_visible_root`].
-fn collect_filtered_root<'a>(
-    node: &'a TopicNode,
-    needle: &str,
-    search_payload: bool,
-    rows: &mut Vec<TopicRow<'a>>,
-) -> bool {
-    let mut matched = false;
-    for child in node.children.values() {
-        matched |= if child.segment.is_empty() {
-            collect_filtered_root(child, needle, search_payload, rows)
-        } else {
-            collect_filtered(child, 0, needle, search_payload, rows)
-        };
-    }
-    matched
 }
 
 fn push_visible<'a>(node: &'a TopicNode, depth: usize, rows: &mut Vec<TopicRow<'a>>) {
@@ -457,7 +467,7 @@ fn collect_filtered<'a>(
                     .is_some_and(|text| text.to_lowercase().contains(needle))
             })
         });
-    let self_matches = node.path.to_lowercase().contains(needle) || payload_matches;
+    let self_matches = display_path(&node.path).to_lowercase().contains(needle) || payload_matches;
 
     if self_matches || child_matches {
         rows.push(row(node, depth, true));
@@ -480,7 +490,13 @@ fn row<'a>(node: &'a TopicNode, depth: usize, expanded: bool) -> TopicRow<'a> {
     };
 
     TopicRow {
-        path: &node.path,
+        // Rows address nodes by path. The leading-slash group needs a key of
+        // its own because its path is empty, just like the invisible root's.
+        path: if node.path.is_empty() {
+            LEADING_SLASH_GROUP
+        } else {
+            &node.path
+        },
         segment: &node.segment,
         depth,
         has_children: node.has_children(),
@@ -587,6 +603,18 @@ mod tests {
     }
 
     #[test]
+    fn retained_topics_under_the_slash_group_ignore_other_topics() {
+        let mut tree = TopicTree::default();
+        tree.insert(message("/home/kitchen/temperature", b"21", true), 100);
+        tree.insert(message("home/kitchen/temperature", b"22", true), 100);
+
+        assert_eq!(
+            tree.retained_topics_under(LEADING_SLASH_GROUP),
+            vec!["/home/kitchen/temperature".to_owned()]
+        );
+    }
+
+    #[test]
     fn filter_keeps_ancestors_of_matches() {
         let mut tree = TopicTree::default();
         tree.insert(message("home/kitchen/temperature", b"21", false), 100);
@@ -649,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn leading_slash_topics_keep_correct_paths() {
+    fn leading_slash_topics_hang_below_a_slash_group() {
         let mut tree = TopicTree::default();
         tree.insert(message("/home/kitchen", b"21", false), 100);
 
@@ -658,24 +686,39 @@ mod tests {
             tree.data("/home/kitchen").unwrap().latest().unwrap().text(),
             Some("21")
         );
+        assert!(tree.node(LEADING_SLASH_GROUP).is_some());
 
         tree.set_all_expanded(true);
         let rows = tree.visible_rows("", false);
         let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
-        // The empty segment created by the leading slash must not become a
-        // visible root row; its children are promoted to the top level.
-        assert!(!paths.contains(&""));
         assert_eq!(
             paths,
-            vec!["/home", "/home/kitchen"],
-            "children keep their real paths"
+            vec![LEADING_SLASH_GROUP, "/home", "/home/kitchen"],
+            "leading-slash topics are children of the / group"
         );
+        // The group's empty segment is rendered as "/".
+        assert_eq!(rows[0].segment, "");
+        assert_eq!(display_path(rows[0].path), "/");
         assert_eq!(rows[0].depth, 0);
         assert_eq!(rows[1].depth, 1);
+        assert_eq!(rows[2].depth, 2);
     }
 
     #[test]
-    fn leading_slash_root_is_hidden_when_filtering() {
+    fn leading_slash_group_collapses_like_any_branch() {
+        let mut tree = TopicTree::default();
+        tree.insert(message("/home/kitchen", b"21", false), 100);
+        tree.set_all_expanded(true);
+
+        tree.toggle_expanded(LEADING_SLASH_GROUP);
+        let rows = tree.visible_rows("", false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, LEADING_SLASH_GROUP);
+        assert!(!rows[0].expanded);
+    }
+
+    #[test]
+    fn leading_slash_group_is_kept_while_filtering() {
         let mut tree = TopicTree::default();
         tree.insert(message("/home/kitchen/temperature", b"21", false), 100);
 
@@ -683,9 +726,34 @@ mod tests {
         let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
         assert_eq!(
             paths,
-            vec!["/home", "/home/kitchen", "/home/kitchen/temperature"]
+            vec![
+                LEADING_SLASH_GROUP,
+                "/home",
+                "/home/kitchen",
+                "/home/kitchen/temperature"
+            ]
         );
         assert_eq!(rows[0].depth, 0);
+
+        // Without a matching child the group does not appear either.
+        assert!(tree.visible_rows("garden", false).is_empty());
+    }
+
+    #[test]
+    fn removing_the_leading_slash_group_keeps_normal_topics() {
+        let mut tree = TopicTree::default();
+        tree.insert(message("/home/kitchen", b"21", false), 100);
+        tree.insert(message("home/kitchen", b"22", false), 100);
+
+        assert!(tree.remove_topic(LEADING_SLASH_GROUP));
+        assert!(tree.node(LEADING_SLASH_GROUP).is_none());
+        assert!(tree.node("/home").is_none());
+        assert!(tree.data("/home/kitchen").is_none());
+        assert_eq!(
+            tree.data("home/kitchen").unwrap().latest().unwrap().text(),
+            Some("22")
+        );
+        assert_eq!(tree.value_topic_count, 1);
     }
 
     #[test]
@@ -706,7 +774,7 @@ mod tests {
         assert_eq!(
             paths,
             HashSet::from([
-                String::new(),
+                LEADING_SLASH_GROUP.to_owned(),
                 "/esp32".to_owned(),
                 "/esp32/sensor".to_owned(),
             ])
