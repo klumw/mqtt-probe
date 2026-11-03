@@ -1,5 +1,7 @@
 //! Right-hand detail panel: value, history, diff and chart views.
 
+use std::time::Duration;
+
 use eframe::egui::text::{LayoutJob, TextFormat};
 use eframe::egui::{
     self, Align, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, RichText, ScrollArea,
@@ -15,7 +17,7 @@ use crate::model::{MessageRecord, TopicData};
 use crate::util::{format_bytes, format_count, format_time, hex_dump, human_qos, truncate_chars};
 
 use super::theme::{Palette, palette};
-use super::widgets::{badge, section_heading};
+use super::widgets::{badge, flash_intensity, section_heading};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailTab {
@@ -47,6 +49,7 @@ pub fn show(
     ui: &mut Ui,
     path: &str,
     data: Option<&TopicData>,
+    received_flash: f32,
     settings: &AppSettings,
     tab: &mut DetailTab,
     value_mode: &mut ValueMode,
@@ -54,6 +57,11 @@ pub fn show(
     chart_field: &mut Option<String>,
 ) -> Vec<DetailAction> {
     let pal = palette(ui.visuals().dark_mode);
+    let highlight = if ui.visuals().dark_mode {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    };
     let mut actions = Vec::new();
 
     ui.horizontal(|ui| {
@@ -135,7 +143,10 @@ pub fn show(
             ))
             // 30% larger than the surrounding detail metadata.
             .size(10.5 * 1.3)
-            .color(pal.muted),
+            .color(
+                pal.muted
+                    .lerp_to_gamma(highlight, received_flash.clamp(0.0, 1.0) * 0.95),
+            ),
         );
         ui.label(
             RichText::new(human_qos(latest.qos))
@@ -874,6 +885,8 @@ impl MqttUiApp {
         let conn_id = self.selected_connection;
         let path = self.selected_topic.clone();
         let mut actions = Vec::new();
+        let flash_duration =
+            Duration::from_secs_f32(self.config.settings.flash_duration_secs.clamp(0.5, 10.0));
 
         egui::Panel::right("details-panel")
             .default_size(470.0)
@@ -892,10 +905,19 @@ impl MqttUiApp {
                     let exists = runtime.is_some_and(|runtime| runtime.tree.node(path).is_some());
                     if exists {
                         let data = runtime.and_then(|runtime| runtime.tree.data(path));
+                        let received_flash = if self.config.settings.flash_tree_on_update {
+                            runtime
+                                .and_then(|runtime| runtime.topic_updates.get(path))
+                                .map(|updated| flash_intensity(updated.elapsed(), flash_duration))
+                                .unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
                         actions = show(
                             ui,
                             path,
                             data,
+                            received_flash,
                             &self.config.settings,
                             &mut self.detail_tab,
                             &mut self.value_mode,

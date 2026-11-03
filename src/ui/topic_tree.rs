@@ -16,6 +16,7 @@ use crate::util::{format_count, truncate_chars};
 
 use super::retained::RetainedDeleteScope;
 use super::theme::{Palette, palette};
+use super::widgets::flash_intensity;
 
 const ROW_HEIGHT: f32 = 30.0;
 const INDENT_STEP: f32 = 14.0;
@@ -276,19 +277,6 @@ fn empty_state(ui: &mut Ui, pal: &Palette, title: &str, hint: &str) {
     });
 }
 
-fn flash_intensity(elapsed: Duration, total: Duration) -> f32 {
-    let total = total.as_secs_f32().max(0.001);
-    let progress = (elapsed.as_secs_f32() / total).clamp(0.0, 1.0);
-    const HOLD: f32 = 0.5;
-
-    if progress <= HOLD {
-        1.0
-    } else {
-        let fade = (progress - HOLD) / (1.0 - HOLD);
-        (1.0 - fade) * (1.0 - fade)
-    }
-}
-
 fn row_flash(active_topics: &HashMap<String, f32>, path: &str) -> f32 {
     active_topics
         .get(path)
@@ -538,21 +526,5 @@ mod tests {
         assert_eq!(row_flash(&topics, "esp32/airquality/other"), 0.0);
         assert_eq!(row_flash(&topics, "home/kitchen/temperature"), 0.0);
         assert_eq!(row_flash(&topics, "esp32x/airquality/sensor"), 0.0);
-    }
-
-    #[test]
-    fn update_flash_holds_then_fades_out() {
-        let total = Duration::from_secs(3);
-
-        assert!((flash_intensity(Duration::ZERO, total) - 1.0).abs() < 0.001);
-        assert!((flash_intensity(Duration::from_millis(1_500), total) - 1.0).abs() < 0.001);
-        assert_eq!(flash_intensity(total, total), 0.0);
-        assert_eq!(
-            flash_intensity(total + Duration::from_millis(50), total),
-            0.0
-        );
-
-        let mid_fade = flash_intensity(Duration::from_millis(2_250), total);
-        assert!(mid_fade > 0.0 && mid_fade < 1.0);
     }
 }
