@@ -939,6 +939,20 @@ details.title:
   ko: "토픽"
   zh: "主题"
   es: "TEMA"
+details.topic_label:
+  en: "Topic:"
+  de: "Thema:"
+  fr: "Sujet :"
+  ko: "토픽:"
+  zh: "主题："
+  es: "Tema:"
+details.copy_topic_tooltip:
+  en: "Copies the topic name to the clipboard"
+  de: "Kopiert den Themennamen in die Zwischenablage"
+  fr: "Copie le nom du sujet dans le presse-papiers"
+  ko: "토픽 이름을 클립보드에 복사합니다"
+  zh: "将主题名称复制到剪贴板"
+  es: "Copia el nombre del tema en el portapapeles"
 details.delete_topic:
   en: "Remove from view"
   de: "Aus Ansicht entfernen"

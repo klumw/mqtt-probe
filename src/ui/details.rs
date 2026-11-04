@@ -64,48 +64,68 @@ pub fn show(
     };
     let mut actions = Vec::new();
 
-    ui.horizontal(|ui| {
-        section_heading(ui, &t!("details.title"), &pal);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .small_button(t!("details.delete_topic"))
-                .on_hover_text(t!("details.delete_topic_tooltip"))
-                .clicked()
-            {
-                actions.push(DetailAction::DeleteTopic);
-            }
-            if data.is_some_and(|data| !data.history.is_empty())
-                && ui
-                    .small_button(t!("details.clear_history"))
-                    .on_hover_text(t!("details.clear_history_tooltip"))
-                    .clicked()
-            {
-                actions.push(DetailAction::ClearHistory);
-            }
-            if ui
-                .small_button(t!("publish.button"))
-                .on_hover_text(t!("details.publish_tooltip"))
-                .clicked()
-            {
-                actions.push(DetailAction::UseTopicForPublish);
-            }
-        });
-    });
+    let latest = data.and_then(|data| data.latest());
 
-    ui.horizontal_wrapped(|ui| {
-        ui.label(
-            RichText::new(display_path(path))
-                .monospace()
-                .size(13.5)
-                .strong()
-                .color(pal.text),
-        );
-        if ui.small_button(t!("common.copy")).clicked() {
-            ui.ctx().copy_text(display_path(path).to_owned());
+    ui.horizontal(|ui| {
+        section_heading(ui, &t!("details.topic_label"), &pal);
+        let topic_name = display_path(path);
+        let copy_text = t!("common.copy").to_string();
+        // Reserve room for the Copy button so a long topic name is elided
+        // before the button instead of pushing it out of the row.
+        let name_width = (ui.available_width()
+            - small_button_width(ui, &copy_text)
+            - ui.spacing().item_spacing.x)
+            .max(40.0);
+        ui.scope(|ui| {
+            ui.set_max_width(name_width);
+            ui.add(
+                Label::new(
+                    RichText::new(topic_name)
+                        .monospace()
+                        .size(13.5)
+                        .strong()
+                        .color(pal.text),
+                )
+                .truncate(),
+            );
+        });
+        if ui
+            .small_button(copy_text)
+            .on_hover_text(t!("details.copy_topic_tooltip"))
+            .clicked()
+        {
+            ui.ctx().copy_text(topic_name.to_owned());
         }
     });
 
-    let latest = data.and_then(|data| data.latest());
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .small_button(t!("publish.button"))
+            .on_hover_text(t!("details.publish_tooltip"))
+            .clicked()
+        {
+            actions.push(DetailAction::UseTopicForPublish);
+        }
+        let has_history = data.is_some_and(|data| !data.history.is_empty());
+        if ui
+            .add_enabled(
+                has_history,
+                egui::Button::new(t!("details.clear_history")).small(),
+            )
+            .on_hover_text(t!("details.clear_history_tooltip"))
+            .clicked()
+        {
+            actions.push(DetailAction::ClearHistory);
+        }
+        if ui
+            .small_button(t!("details.delete_topic"))
+            .on_hover_text(t!("details.delete_topic_tooltip"))
+            .clicked()
+        {
+            actions.push(DetailAction::DeleteTopic);
+        }
+    });
+
     if let Some(latest) = latest {
         ui.horizontal_wrapped(|ui| {
             if latest.retain {
@@ -113,10 +133,32 @@ pub fn show(
             }
             badge(ui, &format!("QoS {}", latest.qos), pal.muted);
             badge(ui, &format_bytes(latest.size() as u64), pal.muted);
+            ui.label(
+                RichText::new(t!(
+                    "details.received",
+                    time = format_time(&latest.received_at, settings.timestamps_utc, true)
+                ))
+                // 30% larger than the surrounding detail metadata.
+                .size(10.5 * 1.3)
+                .color(
+                    pal.muted
+                        .lerp_to_gamma(highlight, received_flash.clamp(0.0, 1.0) * 0.95),
+                ),
+            );
             if latest.text().is_none() {
                 badge(ui, &t!("common.binary"), pal.warn);
             }
+        });
+        ui.horizontal_wrapped(|ui| {
             if let Some(data) = data {
+                ui.label(
+                    RichText::new(t!(
+                        "details.since",
+                        time = format_time(&data.first_seen, settings.timestamps_utc, true)
+                    ))
+                    .size(10.5)
+                    .color(pal.muted),
+                );
                 ui.label(
                     RichText::new(t!(
                         "details.stats",
@@ -126,33 +168,13 @@ pub fn show(
                     .size(10.5)
                     .color(pal.muted),
                 );
-                ui.label(
-                    RichText::new(t!(
-                        "details.since",
-                        time = format_time(&data.first_seen, settings.timestamps_utc, true)
-                    ))
-                    .size(10.5)
-                    .color(pal.muted),
-                );
             }
+            ui.label(
+                RichText::new(human_qos(latest.qos))
+                    .size(10.0)
+                    .color(pal.muted),
+            );
         });
-        ui.label(
-            RichText::new(t!(
-                "details.received",
-                time = format_time(&latest.received_at, settings.timestamps_utc, true)
-            ))
-            // 30% larger than the surrounding detail metadata.
-            .size(10.5 * 1.3)
-            .color(
-                pal.muted
-                    .lerp_to_gamma(highlight, received_flash.clamp(0.0, 1.0) * 0.95),
-            ),
-        );
-        ui.label(
-            RichText::new(human_qos(latest.qos))
-                .size(10.0)
-                .color(pal.muted),
-        );
     }
 
     let Some(data) = data else {
@@ -764,6 +786,18 @@ fn empty_hint(ui: &mut Ui, pal: &Palette, title: &str, hint: &str) {
         ui.add_space(4.0);
         ui.label(RichText::new(hint).size(11.0).color(pal.muted));
     });
+}
+
+/// Horizontal space a small text button occupies, including its padding.
+fn small_button_width(ui: &Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER)
+        .size()
+        .x;
+    // Padding on both sides plus a small safety margin.
+    text_width + 2.0 * ui.spacing().button_padding.x + 4.0
 }
 
 fn truncate_bytes(text: &str, max_bytes: usize) -> String {
