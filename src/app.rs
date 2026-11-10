@@ -13,7 +13,9 @@ use crate::config::{
     AppConfig, ConfigStore, ConnectionProfile, ConnectionSnapshot, MAX_PUBLISH_HISTORY,
     PublishHistoryEntry, SavedTopic,
 };
-use crate::model::topic_tree::{InsertOutcome, LEADING_SLASH_GROUP, TopicNode, display_path};
+use crate::model::topic_tree::{
+    InsertOutcome, LEADING_SLASH_GROUP, SinceMode, TopicNode, display_path,
+};
 use crate::model::{MessageRecord, TopicTree};
 use crate::mqtt::{self, Command, ConnectionHandle, ConnectionState, WorkerEvent};
 use crate::ui;
@@ -183,6 +185,9 @@ pub struct MqttUiApp {
     pub(crate) scroll_top_combo_to_selection: bool,
     pub(crate) selected_topic: Option<String>,
     pub(crate) tree_filter: String,
+    /// Time-based topic filter; disabled while the mode is `AnyTime`.
+    pub(crate) tree_since_mode: SinceMode,
+    pub(crate) tree_since_input: String,
     pub(crate) focus_search: bool,
     pub(crate) detail_tab: DetailTab,
     pub(crate) value_mode: ValueMode,
@@ -249,6 +254,8 @@ impl MqttUiApp {
             scroll_top_combo_to_selection: false,
             selected_topic: None,
             tree_filter: String::new(),
+            tree_since_mode: SinceMode::AnyTime,
+            tree_since_input: String::new(),
             focus_search: false,
             detail_tab: DetailTab::Value,
             value_mode: ValueMode::Json,
@@ -635,7 +642,7 @@ impl MqttUiApp {
                         ConnectionState::Connecting => {}
                     }
                 }
-                WorkerEvent::Message(message) => {
+                WorkerEvent::Message(mut message) => {
                     // Retained messages are the broker's backlog replayed on
                     // (re)subscribe. Keep only those for topics that are part
                     // of the restored view; live messages (retain = false)
@@ -651,6 +658,13 @@ impl MqttUiApp {
                     let was_empty = runtime.tree.value_topic_count == 0;
                     let topic = message.topic.clone();
                     let now = Instant::now();
+                    // The initial retained replay is broker state, not live
+                    // traffic, so it must not satisfy the time filter.
+                    message.backlog = is_initial_retained_replay(
+                        message.retain,
+                        now,
+                        runtime.suppress_highlights_until,
+                    );
                     let outcome = runtime.tree.insert(message, max_history);
                     match outcome {
                         InsertOutcome::NewTopic | InsertOutcome::Updated => {
@@ -754,8 +768,14 @@ impl MqttUiApp {
             self.focus_search = true;
             ctx.request_repaint();
         }
-        if escape && !self.tree_filter.is_empty() {
-            self.tree_filter.clear();
+        if escape {
+            // Esc resets the filters step by step: text first, then the time
+            // filter, matching the documented "reset filters" shortcut.
+            if !self.tree_filter.is_empty() {
+                self.tree_filter.clear();
+            } else if self.tree_since_mode != SinceMode::AnyTime {
+                self.tree_since_mode = SinceMode::AnyTime;
+            }
         }
         if publish {
             self.publish_now();
@@ -946,6 +966,15 @@ fn should_accept_message(restore_filter: bool, retained: bool, topic_in_tree: bo
     !restore_filter || !retained || topic_in_tree
 }
 
+/// Decides whether a retained message belongs to the broker's initial
+/// synchronization replay rather than live traffic.
+///
+/// Retained messages arrive right after a subscription and are therefore
+/// covered by the same window that suppresses their update highlights.
+fn is_initial_retained_replay(retain: bool, now: Instant, suppress_until: Instant) -> bool {
+    retain && now < suppress_until
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1012,6 +1041,20 @@ mod tests {
         ));
         assert!(should_mark_update(
             InsertOutcome::Updated,
+            now + Duration::from_secs(3),
+            suppress_until
+        ));
+    }
+
+    #[test]
+    fn retained_messages_during_the_initial_sync_are_backlog() {
+        let now = Instant::now();
+        let suppress_until = now + Duration::from_secs(2);
+
+        assert!(is_initial_retained_replay(true, now, suppress_until));
+        assert!(!is_initial_retained_replay(false, now, suppress_until));
+        assert!(!is_initial_retained_replay(
+            true,
             now + Duration::from_secs(3),
             suppress_until
         ));
@@ -1135,7 +1178,7 @@ mod tests {
             topics: snapshot_tree(&tree),
         };
         let restored = restore_tree(&snapshot, 100);
-        let rows = restored.visible_rows("", false);
+        let rows = restored.visible_rows("", false, None);
         assert!(rows.iter().any(|row| row.path == "a"));
         assert!(!rows.iter().any(|row| row.path == "a/b/c/d"));
     }

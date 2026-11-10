@@ -17,6 +17,9 @@ pub struct MessageRecord {
     pub payload: Vec<u8>,
     pub qos: u8,
     pub retain: bool,
+    /// True when the message is part of the broker's retained replay after
+    /// subscribing. Such messages are broker state, not live traffic.
+    pub backlog: bool,
     pub received_at: DateTime<Local>,
 }
 
@@ -28,6 +31,7 @@ impl MessageRecord {
             payload,
             qos,
             retain,
+            backlog: false,
             received_at: Local::now(),
         }
     }

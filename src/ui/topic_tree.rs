@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use chrono::Local;
 use eframe::egui::{
     self, Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Sense, Ui,
     Vec2,
@@ -11,8 +12,8 @@ use rust_i18n::t;
 
 use crate::app::MqttUiApp;
 use crate::model::TopicTree;
-use crate::model::topic_tree::display_path;
-use crate::util::{format_count, truncate_chars};
+use crate::model::topic_tree::{SinceFilter, SinceMode, display_path};
+use crate::util::{format_count, format_time, parse_since, truncate_chars};
 
 use super::retained::RetainedDeleteScope;
 use super::theme::{Palette, palette};
@@ -37,6 +38,7 @@ pub enum TreeAction {
 
 pub struct TreeViewState<'a> {
     pub filter: &'a str,
+    pub since: Option<SinceFilter>,
     pub selected: Option<&'a str>,
     pub show_preview: bool,
     pub search_payload: bool,
@@ -54,10 +56,10 @@ pub fn tree_ui(
     state: &TreeViewState<'_>,
     pal: &Palette,
 ) -> Option<TreeAction> {
-    let rows = tree.visible_rows(state.filter, state.search_payload);
+    let rows = tree.visible_rows(state.filter, state.search_payload, state.since);
 
     if rows.is_empty() {
-        let (title, hint) = if !state.filter.trim().is_empty() {
+        let (title, hint) = if !state.filter.trim().is_empty() || state.since.is_some() {
             (
                 t!("tree.no_matches_title").to_string(),
                 t!("tree.no_matches_hint").to_string(),
@@ -184,9 +186,21 @@ pub fn tree_ui(
                 }
 
                 if row.retained {
+                    // Paint the dot with a generous hover rect: the text glyph
+                    // was too small to hit reliably with the pointer.
+                    let (dot_rect, dot_response) =
+                        row_ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
                     row_ui
-                        .label(RichText::new("●").size(9.0).color(accent))
-                        .on_hover_text(t!("common.retained"));
+                        .painter()
+                        .circle_filled(dot_rect.center(), 3.5, accent);
+                    dot_response.on_hover_ui(|ui| {
+                        ui.label(
+                            RichText::new(t!("tree.retained_label"))
+                                .strong()
+                                .color(accent),
+                        );
+                        ui.label(t!("tree.retained_hint"));
+                    });
                 }
 
                 row_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -215,7 +229,7 @@ pub fn tree_ui(
                 } else {
                     row.preview
                 };
-                let tooltip = t!(
+                let mut tooltip = t!(
                     "tree.topic_tooltip",
                     path = display,
                     messages = format_count(row.total),
@@ -223,6 +237,13 @@ pub fn tree_ui(
                     preview = preview
                 )
                 .to_string();
+                if row.retained {
+                    // Hovering the row also explains the retained marker, so
+                    // the explanation is discoverable without hitting the dot.
+                    let retained_label = t!("tree.retained_label");
+                    let retained_hint = t!("tree.retained_hint");
+                    tooltip.push_str(&format!("\n\n● {retained_label} — {retained_hint}"));
+                }
                 let response = response.on_hover_text(tooltip);
                 // A container menu also opens when the secondary click lands
                 // on a child widget such as the topic-name button.
@@ -386,8 +407,14 @@ impl MqttUiApp {
 
                 ui.add_space(6.0);
 
+                let mut since = None;
                 ui.horizontal_wrapped(|ui| {
-                    let search_width = (ui.available_width() - 420.0).max(120.0);
+                    let since_extra = if self.tree_since_mode == SinceMode::AnyTime {
+                        0.0
+                    } else {
+                        180.0
+                    };
+                    let search_width = (ui.available_width() - 560.0 - since_extra).max(120.0);
                     let search_id = egui::Id::unique("tree-search");
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut self.tree_filter)
@@ -402,14 +429,70 @@ impl MqttUiApp {
                     if !self.tree_filter.is_empty() && ui.small_button("×").clicked() {
                         self.tree_filter.clear();
                     }
+
+                    let since_label = match self.tree_since_mode {
+                        SinceMode::AnyTime => t!("tree.since_any"),
+                        SinceMode::ReceivedSince => t!("tree.since_received"),
+                        SinceMode::NoMessagesSince => t!("tree.since_no_messages"),
+                    };
+                    egui::ComboBox::from_id_salt("tree-since-mode")
+                        .width(160.0)
+                        .selected_text(since_label)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.tree_since_mode,
+                                SinceMode::AnyTime,
+                                t!("tree.since_any"),
+                            );
+                            ui.selectable_value(
+                                &mut self.tree_since_mode,
+                                SinceMode::ReceivedSince,
+                                t!("tree.since_received"),
+                            );
+                            ui.selectable_value(
+                                &mut self.tree_since_mode,
+                                SinceMode::NoMessagesSince,
+                                t!("tree.since_no_messages"),
+                            );
+                        });
+
+                    if self.tree_since_mode != SinceMode::AnyTime {
+                        let parsed = parse_since(&self.tree_since_input, Local::now());
+                        let mut input = egui::TextEdit::singleline(&mut self.tree_since_input)
+                            .hint_text(t!("tree.since_hint"))
+                            .desired_width(150.0);
+                        if parsed.is_none() {
+                            input = input.text_color(pal.danger);
+                        }
+                        ui.add(input).on_hover_text(match parsed {
+                            Some(cutoff) => t!(
+                                "tree.since_active",
+                                time =
+                                    format_time(&cutoff, self.config.settings.timestamps_utc, true)
+                            )
+                            .to_string(),
+                            None => t!("tree.since_invalid_hint").to_string(),
+                        });
+                        since = parsed.map(|cutoff| SinceFilter {
+                            mode: self.tree_since_mode,
+                            cutoff,
+                        });
+                    }
+
                     tree_header_buttons(ui, has_runtime, &mut action);
                 });
+
+                if since.is_some() {
+                    // Relative expressions such as "15m" move with the clock.
+                    ui.ctx().request_repaint_after(Duration::from_secs(1));
+                }
 
                 ui.add_space(4.0);
 
                 if let Some(runtime) = conn_id.and_then(|id| self.runtimes.get(&id)) {
                     let state = TreeViewState {
                         filter: &self.tree_filter,
+                        since,
                         selected: self.selected_topic.as_deref(),
                         show_preview: self.config.settings.show_payload_preview,
                         search_payload: self.config.settings.search_in_payload,

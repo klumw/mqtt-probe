@@ -138,6 +138,72 @@ pub fn format_time(timestamp: &DateTime<Local>, utc: bool, with_date: bool) -> S
     }
 }
 
+/// Parses a "since" filter expression into a local cutoff timestamp.
+///
+/// Relative expressions select the last N minutes or hours (`15m`,
+/// `15 minutes`, `4h`, `4 hours`). Absolute expressions are local dates with
+/// an optional time (`10.10.2026`, `10.10.2026 14:30`, `2026-10-10 14:30`).
+/// Returns `None` when the expression cannot be parsed.
+pub fn parse_since(text: &str, now: DateTime<Local>) -> Option<DateTime<Local>> {
+    let text = text.trim().to_lowercase();
+    if text.is_empty() {
+        return None;
+    }
+
+    parse_relative_since(&text, now).or_else(|| parse_absolute_since(&text))
+}
+
+fn parse_relative_since(text: &str, now: DateTime<Local>) -> Option<DateTime<Local>> {
+    let number_end = text
+        .find(|character: char| !character.is_ascii_digit() && character != '.' && character != ',')
+        .unwrap_or(text.len());
+    if number_end == 0 {
+        return None;
+    }
+
+    let value: f64 = text[..number_end].replace(',', ".").parse().ok()?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+
+    let seconds = match text[number_end..].trim() {
+        "m" | "min" | "mins" | "minute" | "minutes" => value * 60.0,
+        "h" | "hr" | "hrs" | "hour" | "hours" => value * 3_600.0,
+        _ => return None,
+    };
+
+    chrono::Duration::try_seconds(seconds.round() as i64).map(|duration| now - duration)
+}
+
+fn parse_absolute_since(text: &str) -> Option<DateTime<Local>> {
+    use chrono::{NaiveDate, NaiveDateTime, TimeZone as _};
+
+    const DATETIME_FORMATS: &[&str] = &[
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        // The input is lowercased before parsing, so the ISO `T` is a `t`.
+        "%Y-%m-%dt%H:%M:%S",
+        "%Y-%m-%dt%H:%M",
+    ];
+    const DATE_FORMATS: &[&str] = &["%d.%m.%Y", "%Y-%m-%d"];
+
+    for format in DATETIME_FORMATS {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(text, format) {
+            return Local.from_local_datetime(&naive).earliest();
+        }
+    }
+    for format in DATE_FORMATS {
+        if let Ok(date) = NaiveDate::parse_from_str(text, format)
+            && let Some(naive) = date.and_hms_opt(0, 0, 0)
+        {
+            return Local.from_local_datetime(&naive).earliest();
+        }
+    }
+    None
+}
+
 pub fn human_qos(qos: u8) -> String {
     match qos {
         0 => t!("util.qos0").to_string(),
@@ -187,5 +253,42 @@ mod tests {
         assert_eq!(format_duration(5), "00:05");
         assert_eq!(format_duration(65), "01:05");
         assert_eq!(format_duration(3_665), "01:01:05");
+    }
+
+    #[test]
+    fn since_expressions_parse_relative_and_absolute_times() {
+        let now = Local::now();
+
+        assert_eq!(
+            parse_since("15 minutes", now),
+            Some(now - chrono::Duration::minutes(15))
+        );
+        assert_eq!(
+            parse_since("4h", now),
+            Some(now - chrono::Duration::hours(4))
+        );
+        assert_eq!(
+            parse_since("30 min", now),
+            Some(now - chrono::Duration::minutes(30))
+        );
+
+        let date = parse_since("10.10.2026", now).expect("date");
+        assert_eq!(
+            date.format("%Y-%m-%d %H:%M").to_string(),
+            "2026-10-10 00:00"
+        );
+
+        let datetime = parse_since("10.10.2026 14:30", now).expect("datetime");
+        assert_eq!(
+            datetime.format("%Y-%m-%d %H:%M").to_string(),
+            "2026-10-10 14:30"
+        );
+
+        let iso = parse_since("2026-10-10T14:30", now).expect("ISO datetime");
+        assert_eq!(iso.format("%Y-%m-%d %H:%M").to_string(), "2026-10-10 14:30");
+
+        assert_eq!(parse_since("", now), None);
+        assert_eq!(parse_since("soon", now), None);
+        assert_eq!(parse_since("10.10", now), None);
     }
 }

@@ -53,7 +53,7 @@
   <icon type="stock">mqtt-probe</icon>
 
   <releases>
-    <release version="0.8.0" date="2026-10-23"/>
+    <release version="0.8.1" date="2026-11-10"/>
   </releases>
 
   <content_rating type="oars-1.1"/>

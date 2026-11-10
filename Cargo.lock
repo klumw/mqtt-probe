@@ -2490,7 +2490,7 @@ dependencies = [
 
 [[package]]
 name = "mqtt-probe"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "base64",

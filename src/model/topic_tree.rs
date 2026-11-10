@@ -35,6 +35,41 @@ pub enum InsertOutcome {
     Ignored,
 }
 
+/// How the "since" filter treats a topic's latest message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SinceMode {
+    /// The time filter is disabled.
+    #[default]
+    AnyTime,
+    /// Show topics that received a message at or after the cutoff.
+    ReceivedSince,
+    /// Show topics whose last message is older than the cutoff.
+    NoMessagesSince,
+}
+
+/// A resolved "since" filter: a mode plus the cutoff timestamp.
+#[derive(Debug, Clone, Copy)]
+pub struct SinceFilter {
+    pub mode: SinceMode,
+    pub cutoff: DateTime<Local>,
+}
+
+impl SinceFilter {
+    fn matches(&self, data: &TopicData) -> bool {
+        // Retained messages replayed at subscribe time are broker state, not
+        // live activity, so they do not count for the time filter.
+        match self.mode {
+            SinceMode::AnyTime => true,
+            SinceMode::ReceivedSince => data
+                .last_live_seen
+                .is_some_and(|last_seen| last_seen >= self.cutoff),
+            SinceMode::NoMessagesSince => data
+                .last_live_seen
+                .is_none_or(|last_seen| last_seen < self.cutoff),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TopicTree {
     pub root: TopicNode,
@@ -83,6 +118,8 @@ pub struct TopicData {
     pub total: u64,
     pub first_seen: DateTime<Local>,
     pub last_seen: DateTime<Local>,
+    /// Receipt time of the most recent live (non-backlog) message.
+    pub last_live_seen: Option<DateTime<Local>>,
     pub preview: String,
     pub bytes: u64,
 }
@@ -94,6 +131,7 @@ impl TopicData {
             total: 0,
             first_seen: timestamp,
             last_seen: timestamp,
+            last_live_seen: None,
             preview: String::new(),
             bytes: 0,
         }
@@ -116,6 +154,9 @@ impl TopicData {
         let max_history = max_history.clamp(10, 5_000);
         self.total = self.total.saturating_add(1);
         self.last_seen = message.received_at;
+        if !message.backlog {
+            self.last_live_seen = Some(message.received_at);
+        }
         self.preview = payload_preview(&message.payload, 96);
         self.bytes = self.bytes.saturating_add(message.size() as u64);
         self.history.push_back(message);
@@ -355,17 +396,26 @@ impl TopicTree {
         self.last_message_at = None;
     }
 
-    pub fn visible_rows(&self, filter: &str, search_payload: bool) -> Vec<TopicRow<'_>> {
+    /// Collects the rows currently visible in the tree.
+    ///
+    /// The text filter and the since filter are combined: with any filter
+    /// active, only matching topics and their ancestors are returned.
+    pub fn visible_rows(
+        &self,
+        filter: &str,
+        search_payload: bool,
+        since: Option<SinceFilter>,
+    ) -> Vec<TopicRow<'_>> {
         let needle = filter.trim().to_lowercase();
         let mut rows = Vec::new();
 
-        if needle.is_empty() {
+        if needle.is_empty() && since.is_none() {
             for child in self.root.children.values() {
                 push_visible(child, 0, &mut rows);
             }
         } else {
             for child in self.root.children.values() {
-                collect_filtered(child, 0, &needle, search_payload, &mut rows);
+                collect_filtered(child, 0, &needle, search_payload, since, &mut rows);
             }
         }
 
@@ -445,6 +495,7 @@ fn collect_filtered<'a>(
     depth: usize,
     needle: &str,
     search_payload: bool,
+    since: Option<SinceFilter>,
     rows: &mut Vec<TopicRow<'a>>,
 ) -> bool {
     if rows.len() >= MAX_VISIBLE_ROWS {
@@ -454,12 +505,20 @@ fn collect_filtered<'a>(
     let mut child_rows = Vec::new();
     let mut child_matches = false;
     for child in node.children.values() {
-        if collect_filtered(child, depth + 1, needle, search_payload, &mut child_rows) {
+        if collect_filtered(
+            child,
+            depth + 1,
+            needle,
+            search_payload,
+            since,
+            &mut child_rows,
+        ) {
             child_matches = true;
         }
     }
 
     let payload_matches = search_payload
+        && !needle.is_empty()
         && node.data.as_ref().is_some_and(|data| {
             data.latest().is_some_and(|message| {
                 message
@@ -467,11 +526,20 @@ fn collect_filtered<'a>(
                     .is_some_and(|text| text.to_lowercase().contains(needle))
             })
         });
-    let self_matches = display_path(&node.path).to_lowercase().contains(needle) || payload_matches;
+    let text_matches = needle.is_empty()
+        || display_path(&node.path).to_lowercase().contains(needle)
+        || payload_matches;
+    let time_matches =
+        since.is_none_or(|filter| node.data.as_ref().is_some_and(|data| filter.matches(data)));
+    let self_matches = text_matches && time_matches;
 
     if self_matches || child_matches {
-        rows.push(row(node, depth, true));
-        rows.extend(child_rows);
+        // Filtered rows respect the user's expand/collapse state so branches
+        // can still be folded while a filter is active.
+        rows.push(row(node, depth, node.expanded));
+        if node.expanded {
+            rows.extend(child_rows);
+        }
         true
     } else {
         false
@@ -515,6 +583,12 @@ mod tests {
 
     fn message(topic: &str, payload: &[u8], retain: bool) -> MessageRecord {
         MessageRecord::new(topic.to_owned(), payload.to_vec(), 0, retain)
+    }
+
+    fn message_at(topic: &str, received_at: DateTime<Local>) -> MessageRecord {
+        let mut message = message(topic, b"1", false);
+        message.received_at = received_at;
+        message
     }
 
     #[test]
@@ -619,8 +693,9 @@ mod tests {
         let mut tree = TopicTree::default();
         tree.insert(message("home/kitchen/temperature", b"21", false), 100);
         tree.insert(message("home/livingroom/light", b"on", false), 100);
+        tree.set_all_expanded(true);
 
-        let rows = tree.visible_rows("kitchen", false);
+        let rows = tree.visible_rows("kitchen", false, None);
         let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
         assert!(paths.contains(&"home"));
         assert!(paths.contains(&"home/kitchen"));
@@ -629,15 +704,36 @@ mod tests {
     }
 
     #[test]
+    fn filtered_rows_respect_collapsed_branches() {
+        let mut tree = TopicTree::default();
+        tree.insert(message("home/kitchen/temperature", b"21", false), 100);
+        tree.set_all_expanded(true);
+
+        tree.toggle_expanded("home");
+        let rows = tree.visible_rows("kitchen", false, None);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+        assert_eq!(paths, vec!["home"]);
+        assert!(!rows[0].expanded);
+
+        tree.toggle_expanded("home");
+        let rows = tree.visible_rows("kitchen", false, None);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+        assert_eq!(
+            paths,
+            vec!["home", "home/kitchen", "home/kitchen/temperature"]
+        );
+    }
+
+    #[test]
     fn collapse_all_hides_children() {
         let mut tree = TopicTree::default();
         tree.insert(message("a/b/c", b"1", false), 100);
         tree.set_all_expanded(true);
-        let rows_before = tree.visible_rows("", false).len();
+        let rows_before = tree.visible_rows("", false, None).len();
         assert_eq!(rows_before, 3);
 
         tree.set_all_expanded(false);
-        let rows_after = tree.visible_rows("", false).len();
+        let rows_after = tree.visible_rows("", false, None).len();
         assert_eq!(rows_after, 1);
     }
 
@@ -646,7 +742,7 @@ mod tests {
         let mut tree = TopicTree::default();
         tree.insert(message("a/b", b"1", false), 100);
 
-        let rows = tree.visible_rows("", false);
+        let rows = tree.visible_rows("", false, None);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].path, "a");
         assert!(!rows[0].expanded);
@@ -662,7 +758,7 @@ mod tests {
         assert_eq!(tree.node_count, 0);
         assert_eq!(tree.value_topic_count, 0);
         assert!(tree.node("home").is_none());
-        assert!(tree.visible_rows("", false).is_empty());
+        assert!(tree.visible_rows("", false, None).is_empty());
     }
 
     #[test]
@@ -670,8 +766,9 @@ mod tests {
         let mut tree = TopicTree::default();
         let payload = format!("{}needle", "x".repeat(200));
         tree.insert(message("long/payload", payload.as_bytes(), false), 100);
+        tree.set_all_expanded(true);
 
-        let rows = tree.visible_rows("needle", true);
+        let rows = tree.visible_rows("needle", true, None);
         let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
         assert!(paths.contains(&"long/payload"));
     }
@@ -689,7 +786,7 @@ mod tests {
         assert!(tree.node(LEADING_SLASH_GROUP).is_some());
 
         tree.set_all_expanded(true);
-        let rows = tree.visible_rows("", false);
+        let rows = tree.visible_rows("", false, None);
         let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
         assert_eq!(
             paths,
@@ -711,7 +808,7 @@ mod tests {
         tree.set_all_expanded(true);
 
         tree.toggle_expanded(LEADING_SLASH_GROUP);
-        let rows = tree.visible_rows("", false);
+        let rows = tree.visible_rows("", false, None);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].path, LEADING_SLASH_GROUP);
         assert!(!rows[0].expanded);
@@ -721,8 +818,9 @@ mod tests {
     fn leading_slash_group_is_kept_while_filtering() {
         let mut tree = TopicTree::default();
         tree.insert(message("/home/kitchen/temperature", b"21", false), 100);
+        tree.set_all_expanded(true);
 
-        let rows = tree.visible_rows("kitchen", false);
+        let rows = tree.visible_rows("kitchen", false, None);
         let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
         assert_eq!(
             paths,
@@ -736,7 +834,7 @@ mod tests {
         assert_eq!(rows[0].depth, 0);
 
         // Without a matching child the group does not appear either.
-        assert!(tree.visible_rows("garden", false).is_empty());
+        assert!(tree.visible_rows("garden", false, None).is_empty());
     }
 
     #[test]
@@ -754,6 +852,202 @@ mod tests {
             Some("22")
         );
         assert_eq!(tree.value_topic_count, 1);
+    }
+
+    #[test]
+    fn since_filter_keeps_only_recent_topics() {
+        let now = Local::now();
+        let mut tree = TopicTree::default();
+        tree.insert(
+            message_at("old/topic", now - chrono::Duration::hours(2)),
+            100,
+        );
+        tree.insert(
+            message_at("new/topic", now - chrono::Duration::minutes(5)),
+            100,
+        );
+        tree.set_all_expanded(true);
+
+        let since = Some(SinceFilter {
+            mode: SinceMode::ReceivedSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+        let rows = tree.visible_rows("", false, since);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+
+        assert!(paths.contains(&"new"));
+        assert!(paths.contains(&"new/topic"));
+        assert!(!paths.contains(&"old"));
+        assert!(!paths.contains(&"old/topic"));
+    }
+
+    #[test]
+    fn since_filtered_branches_can_still_be_collapsed() {
+        let now = Local::now();
+        let mut tree = TopicTree::default();
+        tree.insert(
+            message_at("new/topic", now - chrono::Duration::minutes(5)),
+            100,
+        );
+        tree.set_all_expanded(true);
+
+        let since = Some(SinceFilter {
+            mode: SinceMode::ReceivedSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+
+        tree.toggle_expanded("new");
+        let rows = tree.visible_rows("", false, since);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+        assert_eq!(paths, vec!["new"]);
+        assert!(!rows[0].expanded);
+
+        tree.toggle_expanded("new");
+        let rows = tree.visible_rows("", false, since);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+        assert_eq!(paths, vec!["new", "new/topic"]);
+    }
+
+    #[test]
+    fn retained_backlog_does_not_count_as_live_activity() {
+        let now = Local::now();
+        let mut tree = TopicTree::default();
+        let mut message = message_at("lwt/topic", now - chrono::Duration::minutes(1));
+        message.retain = true;
+        message.backlog = true;
+        tree.insert(message, 100);
+        tree.set_all_expanded(true);
+
+        let received_since = Some(SinceFilter {
+            mode: SinceMode::ReceivedSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+        assert!(tree.visible_rows("", false, received_since).is_empty());
+
+        let no_messages_since = Some(SinceFilter {
+            mode: SinceMode::NoMessagesSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+        let rows = tree.visible_rows("", false, no_messages_since);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+        assert_eq!(paths, vec!["lwt", "lwt/topic"]);
+    }
+
+    #[test]
+    fn live_messages_after_backlog_are_activity() {
+        let now = Local::now();
+        let mut tree = TopicTree::default();
+        let mut backlog = message_at("lwt/topic", now - chrono::Duration::minutes(1));
+        backlog.retain = true;
+        backlog.backlog = true;
+        tree.insert(backlog, 100);
+        tree.insert(
+            message_at("lwt/topic", now - chrono::Duration::minutes(1)),
+            100,
+        );
+        tree.set_all_expanded(true);
+
+        let since = Some(SinceFilter {
+            mode: SinceMode::ReceivedSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+        let rows = tree.visible_rows("", false, since);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+        assert_eq!(paths, vec!["lwt", "lwt/topic"]);
+    }
+
+    #[test]
+    fn no_messages_since_filter_selects_the_old_topics() {
+        let now = Local::now();
+        let mut tree = TopicTree::default();
+        tree.insert(
+            message_at("old/topic", now - chrono::Duration::hours(2)),
+            100,
+        );
+        tree.insert(
+            message_at("new/topic", now - chrono::Duration::minutes(5)),
+            100,
+        );
+
+        tree.set_all_expanded(true);
+
+        let since = Some(SinceFilter {
+            mode: SinceMode::NoMessagesSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+        let rows = tree.visible_rows("", false, since);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+
+        assert!(paths.contains(&"old"));
+        assert!(paths.contains(&"old/topic"));
+        assert!(!paths.contains(&"new"));
+        assert!(!paths.contains(&"new/topic"));
+    }
+
+    #[test]
+    fn since_filter_combines_with_the_text_filter() {
+        let now = Local::now();
+        let mut tree = TopicTree::default();
+        tree.insert(
+            message_at(
+                "home/kitchen/temperature",
+                now - chrono::Duration::minutes(5),
+            ),
+            100,
+        );
+        tree.insert(
+            message_at(
+                "home/garden/temperature",
+                now - chrono::Duration::minutes(5),
+            ),
+            100,
+        );
+        tree.insert(
+            message_at("home/kitchen/humidity", now - chrono::Duration::hours(2)),
+            100,
+        );
+
+        tree.set_all_expanded(true);
+
+        let since = Some(SinceFilter {
+            mode: SinceMode::ReceivedSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+        let rows = tree.visible_rows("kitchen", false, since);
+        let paths: Vec<&str> = rows.iter().map(|row| row.path).collect();
+
+        assert!(paths.contains(&"home"));
+        assert!(paths.contains(&"home/kitchen"));
+        assert!(paths.contains(&"home/kitchen/temperature"));
+        assert!(!paths.contains(&"home/kitchen/humidity"));
+        assert!(!paths.contains(&"home/garden"));
+    }
+
+    #[test]
+    fn since_filter_keeps_ancestors_of_matches() {
+        let now = Local::now();
+        let mut tree = TopicTree::default();
+        tree.insert(
+            message_at(
+                "home/kitchen/temperature",
+                now - chrono::Duration::minutes(5),
+            ),
+            100,
+        );
+
+        tree.set_all_expanded(true);
+
+        let since = Some(SinceFilter {
+            mode: SinceMode::ReceivedSince,
+            cutoff: now - chrono::Duration::minutes(15),
+        });
+        let rows = tree.visible_rows("", false, since);
+
+        // `home` and `home/kitchen` have no messages of their own but are
+        // kept as ancestors of the matching leaf.
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].path, "home");
+        assert_eq!(rows[0].total, 0);
     }
 
     #[test]

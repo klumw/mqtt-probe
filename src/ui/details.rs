@@ -153,17 +153,17 @@ pub fn show(
             if let Some(data) = data {
                 ui.label(
                     RichText::new(t!(
-                        "details.since",
-                        time = format_time(&data.first_seen, settings.timestamps_utc, true)
+                        "details.stats",
+                        stored = format_count(data.history.len() as u64),
+                        received = format_count(data.total)
                     ))
                     .size(10.5)
                     .color(pal.muted),
                 );
                 ui.label(
                     RichText::new(t!(
-                        "details.stats",
-                        stored = format_count(data.history.len() as u64),
-                        received = format_count(data.total)
+                        "details.since",
+                        time = format_time(&data.first_seen, settings.timestamps_utc, true)
                     ))
                     .size(10.5)
                     .color(pal.muted),
